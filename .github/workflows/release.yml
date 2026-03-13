@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build .xpi
+        run: |
+          cd extension
+          npx web-ext build --overwrite-dest
+          cp web-ext-artifacts/readwise_full_content-*.zip web-ext-artifacts/readwise_full_content.xpi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            extension/web-ext-artifacts/readwise_full_content.xpi
+          generate_release_notes: true
+
+      - name: Submit to AMO
+        uses: wdzeng/firefox-addon@v1
+        with:
+          addon-guid: "readwise-full-content@byk.im"
+          xpi-path: extension/web-ext-artifacts/readwise_full_content.xpi
+          jwt-issuer: ${{ secrets.AMO_JWT_ISSUER }}
+          jwt-secret: ${{ secrets.AMO_JWT_SECRET }}

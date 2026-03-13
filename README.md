@@ -33,30 +33,25 @@ On Android Firefox, tap the extension icon on any page to save the current page'
 
 ## Install
 
-### Firefox Desktop
+### From AMO (Recommended)
 
-**Temporary (for testing):**
-1. Open `about:debugging` → "This Firefox" → "Load Temporary Add-on"
-2. Select `extension/manifest.json`
+Install from [addons.mozilla.org](https://addons.mozilla.org/en-US/firefox/addon/readwise-full-content/) — works on both desktop and Android Firefox. Auto-updates included.
 
-**Permanent (self-distributed):**
-1. Go to `about:config` → set `xpinstall.signatures.required` to `false`
-2. Build the `.xpi`: `cd extension && npx web-ext build`
-3. Go to `about:addons` → gear icon → "Install Add-on From File"
-4. Select the `.zip`/`.xpi` from `web-ext-artifacts/`
+### From GitHub Releases
 
-### Firefox Android (Beta or Nightly)
+1. Download the latest `.xpi` from [Releases](https://github.com/BYK/readwise-full-content/releases)
+2. **Desktop:** Open the `.xpi` file in Firefox, or drag it into a Firefox window
+3. **Android (Beta/Nightly):** Transfer the `.xpi` to your device, then in Settings → "Install extensions from file"
 
-1. Go to `about:config` → set `xpinstall.signatures.required` to `false`
-2. In Settings → About Firefox → tap the Firefox logo 5 times to enable the debug menu
-3. Go back to Settings → "Install extensions from file"
-4. Select the `.xpi` file (download it or transfer it to your device)
+### From Source
 
-Alternatively, using [web-ext](https://extensionworkshop.com/documentation/develop/getting-started-with-web-ext/) over USB:
 ```bash
-cd extension
-npx web-ext run --target=firefox-android --android-device=<device-id>
+git clone https://github.com/BYK/readwise-full-content.git
+cd readwise-full-content/extension
+npx web-ext build
 ```
+
+Then load `extension/manifest.json` via `about:debugging` → "Load Temporary Add-on", or install the `.xpi` from `web-ext-artifacts/`.
 
 ## Setup
 
