@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Readwise Full Content",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Automatically enriches Readwise Reader documents with full page content from paywalled sites you're subscribed to",
 
   "permissions": [
@@ -39,7 +39,10 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "readwise-full-content@byk.im",
-      "strict_min_version": "113.0"
+      "strict_min_version": "113.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
     },
     "gecko_android": {
       "strict_min_version": "113.0"
