@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Rounded background -->
+  <rect width="128" height="128" rx="24" fill="#1a1a2e"/>
+
+  <!-- Page/document shape -->
+  <rect x="30" y="22" width="68" height="84" rx="6" fill="#ffffff" opacity="0.95"/>
+
+  <!-- Dog-ear fold -->
+  <path d="M82 22 L98 22 L98 38 Z" fill="#1a1a2e" opacity="0.15"/>
+  <path d="M82 22 L82 38 L98 38 Z" fill="#e0e0e0"/>
+
+  <!-- Text lines (representing content) -->
+  <rect x="42" y="46" width="44" height="4" rx="2" fill="#1a1a2e" opacity="0.7"/>
+  <rect x="42" y="56" width="38" height="4" rx="2" fill="#1a1a2e" opacity="0.5"/>
+  <rect x="42" y="66" width="44" height="4" rx="2" fill="#1a1a2e" opacity="0.5"/>
+  <rect x="42" y="76" width="30" height="4" rx="2" fill="#1a1a2e" opacity="0.5"/>
+  <rect x="42" y="86" width="40" height="4" rx="2" fill="#1a1a2e" opacity="0.5"/>
+
+  <!-- Green check circle (bottom-right, "content filled") -->
+  <circle cx="92" cy="92" r="18" fill="#10b981"/>
+  <path d="M83 92 L89 98 L101 86" stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

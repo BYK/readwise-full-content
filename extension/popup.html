@@ -1,0 +1,311 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        --accent: #e3120b;
+        --dark: #1d1d1b;
+        --grey: #6b6b6b;
+        --light: #f5f5f5;
+        --white: #ffffff;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          sans-serif;
+        min-width: 320px;
+        padding: 16px;
+        color: var(--dark);
+        background: var(--white);
+        font-size: 16px;
+      }
+
+      h1 {
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: 12px;
+        color: var(--accent);
+      }
+
+      .status {
+        padding: 10px 12px;
+        border-radius: 6px;
+        font-size: 13px;
+        line-height: 1.4;
+        margin-bottom: 12px;
+      }
+
+      .status.info {
+        background: #e8f4fd;
+        color: #1a5276;
+      }
+      .status.success {
+        background: #d4edda;
+        color: #155724;
+      }
+      .status.error {
+        background: #f8d7da;
+        color: #721c24;
+      }
+      .status.muted {
+        background: var(--light);
+        color: var(--grey);
+      }
+
+      .page-info {
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        padding: 12px;
+        margin-bottom: 12px;
+      }
+
+      .page-info .title {
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.3;
+        margin-bottom: 4px;
+        /* Truncate long titles */
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
+      .page-info .url {
+        font-size: 11px;
+        color: var(--grey);
+        word-break: break-all;
+        display: -webkit-box;
+        -webkit-line-clamp: 1;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
+      button {
+        width: 100%;
+        padding: 10px 16px;
+        border: none;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 0.15s;
+      }
+
+      button:hover:not(:disabled) {
+        opacity: 0.85;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      button.primary {
+        background: var(--accent);
+        color: var(--white);
+      }
+
+      button.secondary {
+        background: var(--light);
+        color: var(--dark);
+        margin-top: 8px;
+      }
+
+      .section {
+        margin-top: 16px;
+        padding-top: 12px;
+        border-top: 1px solid #e0e0e0;
+      }
+
+      .section-title {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--grey);
+        margin-bottom: 8px;
+      }
+
+      label {
+        display: block;
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 4px;
+        color: var(--grey);
+      }
+
+      input[type="password"],
+      input[type="text"] {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 13px;
+        font-family: monospace;
+      }
+
+      .hint {
+        font-size: 11px;
+        color: var(--grey);
+        margin-top: 4px;
+      }
+
+      .hint a {
+        color: var(--accent);
+      }
+
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 0;
+      }
+
+      .toggle-row .label {
+        font-size: 13px;
+      }
+
+      .toggle-row .sublabel {
+        font-size: 11px;
+        color: var(--grey);
+      }
+
+      .switch {
+        position: relative;
+        width: 40px;
+        height: 22px;
+        flex-shrink: 0;
+      }
+
+      .switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+
+      .slider {
+        position: absolute;
+        cursor: pointer;
+        inset: 0;
+        background: #ccc;
+        border-radius: 22px;
+        transition: 0.2s;
+      }
+
+      .slider::before {
+        content: "";
+        position: absolute;
+        height: 16px;
+        width: 16px;
+        left: 3px;
+        bottom: 3px;
+        background: white;
+        border-radius: 50%;
+        transition: 0.2s;
+      }
+
+      .switch input:checked + .slider {
+        background: var(--accent);
+      }
+
+      .switch input:checked + .slider::before {
+        transform: translateX(18px);
+      }
+
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Readwise Full Content</h1>
+
+    <!-- Save current page section -->
+    <div id="view-save" class="hidden">
+      <div class="page-info">
+        <div class="title" id="page-title"></div>
+        <div class="url" id="page-url"></div>
+      </div>
+      <button class="primary" id="save-btn">
+        Save Full Page to Readwise
+      </button>
+    </div>
+
+    <div id="view-saving" class="hidden">
+      <div class="status info">Saving to Readwise Reader…</div>
+    </div>
+
+    <div id="view-saved" class="hidden">
+      <div class="status success">✓ Saved to Readwise Reader!</div>
+      <a id="reader-link" href="#" target="_blank">
+        <button class="secondary">Open in Reader</button>
+      </a>
+    </div>
+
+    <div id="view-error" class="hidden">
+      <div class="status error" id="error-message"></div>
+      <button class="primary" id="retry-btn">Try Again</button>
+    </div>
+
+    <div id="view-no-page" class="hidden">
+      <div class="status muted">Navigate to a web page to save it.</div>
+    </div>
+
+    <!-- Background polling section (desktop) -->
+    <div class="section">
+      <div class="section-title">Background Enrichment</div>
+      <div class="toggle-row">
+        <div>
+          <div class="label">Auto-enrich saved articles</div>
+          <div class="sublabel">
+            Fetches full content for thin/paywalled docs
+          </div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="polling-toggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="status muted" id="poller-status" style="margin-top: 8px">
+        Checking status…
+      </div>
+    </div>
+
+    <!-- Token settings -->
+    <div class="section">
+      <div class="section-title">Settings</div>
+      <div id="token-missing" class="hidden">
+        <div class="status error" style="margin-bottom: 8px">
+          Set your Readwise token to get started.
+        </div>
+      </div>
+      <label for="token-input">Readwise Access Token</label>
+      <input
+        type="password"
+        id="token-input"
+        placeholder="Enter your Readwise token"
+      />
+      <div class="hint">
+        Get yours at
+        <a href="https://readwise.io/access_token" target="_blank"
+          >readwise.io/access_token</a
+        >
+      </div>
+      <button class="secondary" id="save-token-btn" style="margin-top: 8px">
+        Save Token
+      </button>
+    </div>
+
+    <script src="readwise.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
