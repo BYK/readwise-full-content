@@ -22,6 +22,7 @@ const els = {
   readerLink: document.getElementById("reader-link"),
   errorMessage: document.getElementById("error-message"),
   pollingToggle: document.getElementById("polling-toggle"),
+  retryAllBtn: document.getElementById("retry-all-btn"),
   pollerStatus: document.getElementById("poller-status"),
   tokenInput: document.getElementById("token-input"),
   saveTokenBtn: document.getElementById("save-token-btn"),
@@ -215,6 +216,19 @@ async function saveTokenAction() {
 els.saveBtn.addEventListener("click", savePage);
 els.retryBtn.addEventListener("click", savePage);
 els.saveTokenBtn.addEventListener("click", saveTokenAction);
+
+els.retryAllBtn.addEventListener("click", async () => {
+  els.retryAllBtn.disabled = true;
+  els.retryAllBtn.textContent = "Re-checking…";
+  await browser.runtime.sendMessage({ type: "CLEAR_CACHE_AND_POLL" });
+  // Update status after a moment
+  setTimeout(async () => {
+    const status = await browser.runtime.sendMessage({ type: "GET_STATUS" });
+    updatePollerStatus(status);
+    els.retryAllBtn.disabled = false;
+    els.retryAllBtn.textContent = "Re-check all recent articles";
+  }, 3000);
+});
 
 els.pollingToggle.addEventListener("change", async () => {
   const enabled = els.pollingToggle.checked;

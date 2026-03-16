@@ -509,6 +509,18 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  // Clear processed cache and re-poll immediately
+  if (message.type === "CLEAR_CACHE_AND_POLL") {
+    (async () => {
+      await browser.storage.local.remove("processedUrls");
+      console.log("[readwise-full-content] Cleared processed URLs cache");
+      await ensurePollerRunning();
+      pollAndEnrich();
+      sendResponse({ success: true });
+    })();
+    return true;
+  }
+
   // Toggle polling
   if (message.type === "SET_POLLING") {
     (async () => {
