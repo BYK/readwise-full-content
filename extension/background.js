@@ -287,23 +287,11 @@ async function enrichDocument(token, doc) {
 
   const { html, finalUrl } = result;
 
-  // Check if we got a real page or a Cloudflare challenge / error page
-  if (html.length < MIN_HTML_SIZE) {
+  // The fetch→tab fallback already filters challenge pages,
+  // but double-check in case the tab fallback also got a challenge
+  if (!isUsableHtml(html)) {
     console.warn(
-      `[readwise-full-content] HTML too small (${html.length} bytes), likely a challenge page — ${doc.source_url}`,
-    );
-    return false;
-  }
-
-  // Quick check: if the HTML contains Cloudflare challenge markers, skip
-  if (
-    html.includes("cf-challenge-running") ||
-    html.includes("challenge-platform") ||
-    html.includes("Just a moment...") ||
-    html.includes("Checking your browser")
-  ) {
-    console.warn(
-      `[readwise-full-content] Cloudflare challenge detected, skipping — ${doc.source_url}`,
+      `[readwise-full-content] Unusable HTML (${html.length} bytes), skipping — ${doc.source_url}`,
     );
     return false;
   }
@@ -337,13 +325,87 @@ async function enrichDocument(token, doc) {
 }
 
 /**
- * Load a URL in a background tab, wait for it to finish loading,
- * extract the full page HTML, then close the tab.
+ * Extract full page HTML from a URL.
  *
- * Returns { html, finalUrl } where finalUrl is the URL after any redirects.
- * This handles tracking redirects (e.g., click.e.economist.com → economist.com).
+ * Strategy: try fetch() first (invisible, fast, carries cookies).
+ * If the response looks like a Cloudflare challenge or is too small,
+ * fall back to opening a real background tab (visible but handles JS).
+ *
+ * Returns { html, finalUrl } where finalUrl is the URL after redirects.
  */
 async function extractPageHtml(url) {
+  // First try: invisible fetch with cookies
+  const fetchResult = await extractViaFetch(url);
+  if (fetchResult && isUsableHtml(fetchResult.html)) {
+    console.log(
+      `[readwise-full-content] Fetched via invisible request: ${url}`,
+    );
+    return fetchResult;
+  }
+
+  // Fallback: open a real browser tab (handles JS challenges)
+  console.log(
+    `[readwise-full-content] Fetch insufficient, falling back to tab: ${url}`,
+  );
+  return extractViaTab(url);
+}
+
+/**
+ * Try to fetch page HTML using fetch() with credentials.
+ * This is invisible — no tab flashing.
+ * Works for most sites since the extension has host permissions
+ * and fetch() includes cookies.
+ */
+async function extractViaFetch(url) {
+  try {
+    const res = await fetch(url, {
+      credentials: "include",
+      redirect: "follow",
+      headers: {
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "User-Agent": navigator.userAgent,
+      },
+    });
+
+    if (!res.ok) return null;
+
+    const html = await res.text();
+    const finalUrl = res.url; // URL after redirects
+    return { html, finalUrl };
+  } catch (err) {
+    console.warn(
+      `[readwise-full-content] Fetch failed for ${url}:`,
+      err.message,
+    );
+    return null;
+  }
+}
+
+/**
+ * Check if HTML looks like real page content (not a challenge page).
+ */
+function isUsableHtml(html) {
+  if (!html || html.length < MIN_HTML_SIZE) return false;
+
+  // Cloudflare challenge markers
+  if (
+    html.includes("cf-challenge-running") ||
+    html.includes("challenge-platform") ||
+    html.includes("Just a moment...") ||
+    html.includes("Checking your browser")
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Fallback: load URL in a real background tab for JS-heavy sites.
+ * The tab is visible briefly in the tab bar.
+ */
+async function extractViaTab(url) {
   let tab;
   try {
     tab = await browser.tabs.create({ url, active: false });

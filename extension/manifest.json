@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Readwise Full Content",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Automatically enriches Readwise Reader documents with full page content from paywalled sites you're subscribed to",
 
   "permissions": [
