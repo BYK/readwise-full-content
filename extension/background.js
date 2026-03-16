@@ -175,6 +175,9 @@ async function pollAndEnrich() {
         continue;
       }
 
+      // Skip archived documents
+      if (doc.location === "archive") continue;
+
       // Skip if clearly complete (high word count, no markers needed)
       if (doc.word_count >= HIGH_WORD_COUNT) continue;
 
