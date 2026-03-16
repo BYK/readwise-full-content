@@ -76,7 +76,8 @@ async function init() {
     !currentTab?.url ||
     currentTab.url.startsWith("about:") ||
     currentTab.url.startsWith("moz-extension:") ||
-    currentTab.url.startsWith("chrome:")
+    currentTab.url.startsWith("chrome:") ||
+    currentTab.url.includes("readwise.io")
   ) {
     showView("noPage");
     return;
