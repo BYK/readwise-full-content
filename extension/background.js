@@ -485,7 +485,9 @@ function waitForTabLoad(tabId) {
 // Handle alarm fires
 browser.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "readwise-poll") {
-    pollAndEnrich();
+    pollAndEnrich().catch((err) =>
+      console.error("[readwise-full-content] Poll error:", err),
+    );
   }
 });
 
