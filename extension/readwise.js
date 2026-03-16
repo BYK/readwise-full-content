@@ -44,8 +44,7 @@ async function listDocuments(token, opts = {}) {
   if (opts.updatedAfter) params.set("updatedAfter", opts.updatedAfter);
   if (opts.location) params.set("location", opts.location);
   if (opts.limit) params.set("limit", String(opts.limit));
-  // We don't need HTML content in the list — we just need metadata
-  // to decide which documents need enrichment.
+  if (opts.withHtmlContent) params.set("withHtmlContent", "true");
 
   const url = `${READWISE_BASE}/v3/list/?${params.toString()}`;
   const res = await fetch(url, {

@@ -11,11 +11,72 @@
 const POLL_INTERVAL_MINUTES = 2;
 
 /**
- * Minimum word count to consider a document "complete".
- * Paywalled excerpts are typically 150-400 words.
- * Most full articles are 800+ words.
+ * Documents with fewer words than this are always candidates for enrichment.
+ * This catches obvious stubs that have very little content.
  */
-const MIN_WORD_COUNT = 500;
+const LOW_WORD_COUNT = 200;
+
+/**
+ * Documents above this word count are never enriched (assumed complete).
+ * Between LOW and HIGH, we check for paywall markers in the HTML.
+ */
+const HIGH_WORD_COUNT = 1500;
+
+/**
+ * Paywall / registration wall markers found in stub HTML.
+ * If any of these appear in a document's HTML content, it's considered
+ * paywalled regardless of word count (within the LOW–HIGH range).
+ * Case-insensitive matching.
+ */
+const PAYWALL_MARKERS = [
+  // Generic paywall CTAs
+  "subscribe now",
+  "start your free trial",
+  "free trial",
+  "create a free account",
+  "create account",
+  "register now",
+  "sign up to read",
+  "log in to read",
+  "already have an account",
+  "already a subscriber",
+  "continue reading with",
+  "unlock this article",
+  "get unlimited access",
+  "become a member",
+  "subscribers only",
+  "subscriber exclusive",
+  "premium content",
+
+  // Economist-specific
+  "regwall:register",
+  "regwall:login",
+  "regwall:subscribe",
+  "subscribe:article-regwall",
+
+  // Washington Post
+  "subscribe to continue reading",
+  "free account to read this",
+
+  // Wired / Condé Nast
+  "already a wired subscriber",
+
+  // NYT
+  "subscriber-only content",
+  "create your free account or log in",
+
+  // FT
+  "choose your subscription",
+  "ft.com/products",
+
+  // Generic data-attribute markers
+  "data-paywall",
+  "data-regwall",
+  "class=\"paywall",
+  "class=\"regwall",
+  'id="paywall',
+  'id="regwall',
+];
 
 /** How many recent documents to check per poll */
 const DOCS_TO_CHECK = 20;
@@ -91,11 +152,13 @@ async function pollAndEnrich() {
   console.log("[readwise-full-content] Polling for thin documents...");
 
   try {
-    // Fetch documents updated recently
+    // Fetch documents updated recently, including HTML content
+    // so we can check for paywall markers
     const lookbackDate = new Date(Date.now() - LOOKBACK_WINDOW).toISOString();
     const docs = await listDocuments(token, {
       updatedAfter: lookbackDate,
       limit: DOCS_TO_CHECK,
+      withHtmlContent: true,
     });
 
     console.log(
@@ -112,11 +175,11 @@ async function pollAndEnrich() {
         continue;
       }
 
-      // Skip if it already has decent content
-      if (doc.word_count >= MIN_WORD_COUNT) continue;
+      // Skip if clearly complete (high word count, no markers needed)
+      if (doc.word_count >= HIGH_WORD_COUNT) continue;
 
       // Skip non-web content (PDFs, tweets, etc.)
-      const validCategories = ["article", "rss", "email"];
+      const validCategories = ["article", "rss"];
       if (!validCategories.includes(doc.category)) continue;
 
       // Skip if no source URL
@@ -127,14 +190,17 @@ async function pollAndEnrich() {
         const url = new URL(doc.source_url);
         if (url.hostname.includes("readwise.io")) continue;
         if (url.hostname.includes("read.readwise.io")) continue;
-        // Skip non-http(s) URLs
         if (!url.protocol.startsWith("http")) continue;
       } catch {
         continue;
       }
 
+      // Determine if this document needs enrichment
+      const needsEnrichment = shouldEnrich(doc);
+      if (!needsEnrichment) continue;
+
       console.log(
-        `[readwise-full-content] Enriching: "${doc.title}" (${doc.word_count} words) — ${doc.source_url}`,
+        `[readwise-full-content] Enriching: "${doc.title}" (${doc.word_count} words, reason: ${needsEnrichment}) — ${doc.source_url}`,
       );
 
       try {
@@ -150,7 +216,6 @@ async function pollAndEnrich() {
           `[readwise-full-content] Failed to enrich "${doc.title}":`,
           err.message,
         );
-        // Mark as processed to avoid retrying immediately
         await markProcessed(doc.source_url);
       }
     }
@@ -165,6 +230,43 @@ async function pollAndEnrich() {
     }
     console.error("[readwise-full-content] Poll error:", err);
   }
+}
+
+/**
+ * Determine if a document needs enrichment.
+ * Returns a reason string if yes, or false if no.
+ *
+ * Logic:
+ * - Very low word count (< LOW_WORD_COUNT): always enrich
+ * - Low-to-medium word count (LOW–HIGH): check HTML for paywall markers
+ * - High word count (>= HIGH_WORD_COUNT): skip (assumed complete)
+ */
+function shouldEnrich(doc) {
+  if (doc.word_count < LOW_WORD_COUNT) {
+    return "low-word-count";
+  }
+
+  // For medium word count, check the HTML content for paywall markers
+  const html = doc.html_content || "";
+  if (html && hasPaywallMarkers(html)) {
+    return "paywall-detected";
+  }
+
+  // If no HTML content available from Readwise, be conservative
+  // and enrich anything under the high threshold from known paywall sites
+  if (!html && doc.word_count < HIGH_WORD_COUNT) {
+    return "no-html-available";
+  }
+
+  return false;
+}
+
+/**
+ * Check if HTML content contains paywall / registration markers.
+ */
+function hasPaywallMarkers(html) {
+  const lower = html.toLowerCase();
+  return PAYWALL_MARKERS.some((marker) => lower.includes(marker.toLowerCase()));
 }
 
 /**
