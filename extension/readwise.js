@@ -85,14 +85,23 @@ async function deleteDocument(token, documentId) {
  * Create a document in Readwise Reader with full HTML content.
  */
 async function createDocument(token, doc) {
+  const bodyJson = JSON.stringify(doc);
+  console.log(
+    `[readwise-full-content] Creating document: url=${doc.url} html=${(doc.html || "").length} bytes, payload=${bodyJson.length} bytes`,
+  );
+
   const res = await fetch(`${READWISE_BASE}/v3/save/`, {
     method: "POST",
     headers: {
       Authorization: `Token ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(doc),
+    body: bodyJson,
   });
+
+  console.log(
+    `[readwise-full-content] Create response: ${res.status} ${res.statusText}`,
+  );
 
   if (res.status === 429) {
     const retryAfter = res.headers.get("Retry-After") || "60";
@@ -105,6 +114,12 @@ async function createDocument(token, doc) {
   }
 
   const data = await res.json();
+  if (res.status === 200) {
+    console.warn(
+      `[readwise-full-content] Document already existed (${data.id}) — content was NOT updated`,
+    );
+  }
+
   return {
     id: data.id,
     url: data.url,
@@ -124,10 +139,28 @@ async function createDocument(token, doc) {
  * @param {object} doc - Document creation payload (url, html, title, etc.)
  */
 async function replaceDocument(token, existingId, doc) {
+  console.log(
+    `[readwise-full-content] Replacing document ${existingId} with url=${doc.url}`,
+  );
+
   await deleteDocument(token, existingId);
 
   // Brief pause for deletion to propagate
-  await new Promise((r) => setTimeout(r, 1500));
+  await new Promise((r) => setTimeout(r, 2000));
 
-  return createDocument(token, doc);
+  const result = await createDocument(token, doc);
+
+  // If the document already existed under this URL, it means the delete
+  // didn't clear the URL dedup, or another document has this URL.
+  // Try deleting that one too and creating again.
+  if (result.alreadyExisted) {
+    console.warn(
+      `[readwise-full-content] URL still occupied (${result.id}), deleting and retrying...`,
+    );
+    await deleteDocument(token, result.id);
+    await new Promise((r) => setTimeout(r, 2000));
+    return createDocument(token, doc);
+  }
+
+  return result;
 }
