@@ -1,9 +1,6 @@
 /**
  * Background script — polls Readwise for thin/paywalled documents and
  * enriches them with full page content by loading them in background tabs.
- *
- * Only runs on desktop (Firefox Android doesn't support persistent background
- * scripts or programmatic tab management in the same way).
  */
 
 // ============================================================================
@@ -13,8 +10,12 @@
 /** Poll interval in minutes */
 const POLL_INTERVAL_MINUTES = 2;
 
-/** Minimum word count to consider a document "complete" */
-const MIN_WORD_COUNT = 100;
+/**
+ * Minimum word count to consider a document "complete".
+ * Paywalled excerpts are typically 150-400 words.
+ * Most full articles are 800+ words.
+ */
+const MIN_WORD_COUNT = 500;
 
 /** How many recent documents to check per poll */
 const DOCS_TO_CHECK = 20;
@@ -23,20 +24,55 @@ const DOCS_TO_CHECK = 20;
 const PAGE_LOAD_TIMEOUT = 15000;
 
 /** Cooldown: don't re-process the same URL within this window (ms) */
-const PROCESS_COOLDOWN = 60 * 60 * 1000; // 1 hour
+const PROCESS_COOLDOWN = 24 * 60 * 60 * 1000; // 24 hours
+
+/** How far back to look for documents to enrich (ms) */
+const LOOKBACK_WINDOW = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Minimum HTML size (bytes) to consider an extraction successful.
+ * Cloudflare challenge pages are typically small (~5-15KB).
+ * Real article pages are usually 50KB+.
+ */
+const MIN_HTML_SIZE = 30000;
 
 // ============================================================================
-// State
+// State — persisted to storage to survive event page unloads
 // ============================================================================
 
 /**
- * Track recently processed URLs to avoid re-processing.
- * Map<url, timestamp>
+ * Get the set of recently processed URLs from storage.
+ * @returns {Promise<Record<string, number>>} Map of URL → timestamp
  */
-const processedUrls = new Map();
+async function getProcessedUrls() {
+  const { processedUrls } = await browser.storage.local.get("processedUrls");
+  return processedUrls || {};
+}
 
-/** Whether the background poller is active */
-let pollerActive = false;
+async function markProcessed(url) {
+  const urls = await getProcessedUrls();
+  urls[url] = Date.now();
+
+  // Prune entries older than cooldown
+  const cutoff = Date.now() - PROCESS_COOLDOWN;
+  for (const [key, ts] of Object.entries(urls)) {
+    if (ts < cutoff) delete urls[key];
+  }
+
+  await browser.storage.local.set({ processedUrls: urls });
+}
+
+async function isRecentlyProcessed(url) {
+  const urls = await getProcessedUrls();
+  const ts = urls[url];
+  if (!ts) return false;
+  return Date.now() - ts < PROCESS_COOLDOWN;
+}
+
+async function getEnrichCount() {
+  const urls = await getProcessedUrls();
+  return Object.keys(urls).length;
+}
 
 // ============================================================================
 // Polling logic
@@ -52,57 +88,79 @@ async function pollAndEnrich() {
   const { pollingEnabled } = await browser.storage.local.get("pollingEnabled");
   if (pollingEnabled === false) return;
 
+  console.log("[readwise-full-content] Polling for thin documents...");
+
   try {
-    // Fetch recent documents
+    // Fetch documents updated recently
+    const lookbackDate = new Date(Date.now() - LOOKBACK_WINDOW).toISOString();
     const docs = await listDocuments(token, {
+      updatedAfter: lookbackDate,
       limit: DOCS_TO_CHECK,
     });
 
+    console.log(
+      `[readwise-full-content] Found ${docs.length} recent documents`,
+    );
+
+    let enriched = 0;
+    let skipped = 0;
+
     for (const doc of docs) {
       // Skip if already processed recently
-      if (isRecentlyProcessed(doc.source_url)) continue;
+      if (await isRecentlyProcessed(doc.source_url)) {
+        skipped++;
+        continue;
+      }
 
       // Skip if it already has decent content
       if (doc.word_count >= MIN_WORD_COUNT) continue;
 
       // Skip non-web content (PDFs, tweets, etc.)
-      if (doc.category !== "article" && doc.category !== "rss") continue;
+      const validCategories = ["article", "rss", "email"];
+      if (!validCategories.includes(doc.category)) continue;
 
       // Skip if no source URL
       if (!doc.source_url) continue;
 
-      // Skip readwise.io URLs and other internal URLs
+      // Skip internal URLs
       try {
         const url = new URL(doc.source_url);
         if (url.hostname.includes("readwise.io")) continue;
         if (url.hostname.includes("read.readwise.io")) continue;
+        // Skip non-http(s) URLs
+        if (!url.protocol.startsWith("http")) continue;
       } catch {
         continue;
       }
 
       console.log(
-        `[readwise-full-content] Enriching: ${doc.title} (${doc.word_count} words) — ${doc.source_url}`,
+        `[readwise-full-content] Enriching: "${doc.title}" (${doc.word_count} words) — ${doc.source_url}`,
       );
 
       try {
-        await enrichDocument(token, doc);
-        markProcessed(doc.source_url);
+        const success = await enrichDocument(token, doc);
+        await markProcessed(doc.source_url);
+        if (success) enriched++;
       } catch (err) {
         if (err.message?.startsWith("RATE_LIMITED")) {
-          console.warn("[readwise-full-content] Rate limited, backing off");
-          return; // Stop processing, wait for next poll
+          console.warn("[readwise-full-content] Rate limited, will retry next poll");
+          return;
         }
         console.error(
-          `[readwise-full-content] Failed to enrich ${doc.source_url}:`,
+          `[readwise-full-content] Failed to enrich "${doc.title}":`,
           err.message,
         );
         // Mark as processed to avoid retrying immediately
-        markProcessed(doc.source_url);
+        await markProcessed(doc.source_url);
       }
     }
+
+    console.log(
+      `[readwise-full-content] Poll complete: ${enriched} enriched, ${skipped} already processed`,
+    );
   } catch (err) {
     if (err.message?.startsWith("RATE_LIMITED")) {
-      console.warn("[readwise-full-content] Rate limited during list, backing off");
+      console.warn("[readwise-full-content] Rate limited during list, will retry next poll");
       return;
     }
     console.error("[readwise-full-content] Poll error:", err);
@@ -112,19 +170,49 @@ async function pollAndEnrich() {
 /**
  * Enrich a single document by loading it in a background tab,
  * extracting the full page HTML, and pushing it to Readwise.
+ *
+ * Returns true if enrichment succeeded, false if skipped.
  */
 async function enrichDocument(token, doc) {
-  const html = await extractPageHtml(doc.source_url);
-  if (!html) {
-    console.warn(`[readwise-full-content] No HTML extracted from ${doc.source_url}`);
-    return;
+  const result = await extractPageHtml(doc.source_url);
+
+  if (!result?.html) {
+    console.warn(
+      `[readwise-full-content] No HTML extracted from ${doc.source_url}`,
+    );
+    return false;
   }
 
-  // Replace the thin document with the full-content version.
-  // Let Readwise clean the HTML (it's good at extracting article content
-  // from full page HTML, stripping nav/ads/etc.).
+  const { html, finalUrl } = result;
+
+  // Check if we got a real page or a Cloudflare challenge / error page
+  if (html.length < MIN_HTML_SIZE) {
+    console.warn(
+      `[readwise-full-content] HTML too small (${html.length} bytes), likely a challenge page — ${doc.source_url}`,
+    );
+    return false;
+  }
+
+  // Quick check: if the HTML contains Cloudflare challenge markers, skip
+  if (
+    html.includes("cf-challenge-running") ||
+    html.includes("challenge-platform") ||
+    html.includes("Just a moment...") ||
+    html.includes("Checking your browser")
+  ) {
+    console.warn(
+      `[readwise-full-content] Cloudflare challenge detected, skipping — ${doc.source_url}`,
+    );
+    return false;
+  }
+
+  // Use the final URL (after redirects) as the canonical URL.
+  // This handles tracking redirects like click.e.economist.com → economist.com
+  const canonicalUrl = finalUrl || doc.source_url;
+
+  // Replace the thin document with the full-content version
   await replaceDocument(token, doc.id, {
-    url: doc.source_url,
+    url: canonicalUrl,
     html,
     should_clean_html: true,
     title: doc.title,
@@ -137,36 +225,49 @@ async function enrichDocument(token, doc) {
     saved_using: "readwise-full-content",
   });
 
-  console.log(`[readwise-full-content] Enriched: ${doc.title}`);
+  console.log(
+    `[readwise-full-content] ✓ Enriched: "${doc.title}"` +
+      (canonicalUrl !== doc.source_url
+        ? ` (redirected to ${canonicalUrl})`
+        : ""),
+  );
+  return true;
 }
 
 /**
  * Load a URL in a background tab, wait for it to finish loading,
  * extract the full page HTML, then close the tab.
  *
- * This works because the tab runs in the user's browser session,
- * inheriting all cookies (subscriber sessions, Cloudflare clearance, etc.).
+ * Returns { html, finalUrl } where finalUrl is the URL after any redirects.
+ * This handles tracking redirects (e.g., click.e.economist.com → economist.com).
  */
 async function extractPageHtml(url) {
   let tab;
   try {
-    // Create a background tab (not active — doesn't steal focus)
     tab = await browser.tabs.create({ url, active: false });
 
-    // Wait for the tab to finish loading
     await waitForTabLoad(tab.id);
 
     // Give JS-rendered content a moment to hydrate
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, 3000));
 
-    // Execute content script to extract HTML
+    // Get the final URL (after redirects) and extract HTML
+    const updatedTab = await browser.tabs.get(tab.id);
+    const finalUrl = updatedTab.url;
+
     const results = await browser.tabs.executeScript(tab.id, {
       code: `document.documentElement.outerHTML`,
     });
 
-    return results?.[0] || null;
+    const html = results?.[0] || null;
+    return html ? { html, finalUrl } : null;
+  } catch (err) {
+    console.error(
+      `[readwise-full-content] Tab extraction error for ${url}:`,
+      err.message,
+    );
+    return null;
   } finally {
-    // Always close the background tab
     if (tab?.id) {
       try {
         await browser.tabs.remove(tab.id);
@@ -184,7 +285,6 @@ function waitForTabLoad(tabId) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       browser.tabs.onUpdated.removeListener(listener);
-      // Resolve anyway — partial content is better than nothing
       resolve();
     }, PAGE_LOAD_TIMEOUT);
 
@@ -198,63 +298,22 @@ function waitForTabLoad(tabId) {
 
     browser.tabs.onUpdated.addListener(listener);
 
-    // Check if already complete
-    browser.tabs.get(tabId).then((tab) => {
-      if (tab.status === "complete") {
-        clearTimeout(timeout);
-        browser.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }
-    }).catch(reject);
+    browser.tabs
+      .get(tabId)
+      .then((tab) => {
+        if (tab.status === "complete") {
+          clearTimeout(timeout);
+          browser.tabs.onUpdated.removeListener(listener);
+          resolve();
+        }
+      })
+      .catch(reject);
   });
 }
 
 // ============================================================================
-// Cooldown tracking
+// Alarm-based polling
 // ============================================================================
-
-function isRecentlyProcessed(url) {
-  const ts = processedUrls.get(url);
-  if (!ts) return false;
-  if (Date.now() - ts > PROCESS_COOLDOWN) {
-    processedUrls.delete(url);
-    return false;
-  }
-  return true;
-}
-
-function markProcessed(url) {
-  processedUrls.set(url, Date.now());
-  // Prune old entries
-  if (processedUrls.size > 200) {
-    const cutoff = Date.now() - PROCESS_COOLDOWN;
-    for (const [key, ts] of processedUrls) {
-      if (ts < cutoff) processedUrls.delete(key);
-    }
-  }
-}
-
-// ============================================================================
-// Alarm-based polling (desktop only)
-// ============================================================================
-
-async function startPoller() {
-  if (pollerActive) return;
-  pollerActive = true;
-
-  // Create an alarm that fires every POLL_INTERVAL_MINUTES
-  await browser.alarms.create("readwise-poll", {
-    periodInMinutes: POLL_INTERVAL_MINUTES,
-  });
-
-  // Also run immediately on start
-  pollAndEnrich();
-}
-
-async function stopPoller() {
-  pollerActive = false;
-  await browser.alarms.clear("readwise-poll");
-}
 
 // Handle alarm fires
 browser.alarms.onAlarm.addListener((alarm) => {
@@ -263,19 +322,40 @@ browser.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
+async function ensurePollerRunning() {
+  const token = await getToken();
+  if (!token) return;
+
+  const { pollingEnabled } = await browser.storage.local.get("pollingEnabled");
+  if (pollingEnabled === false) return;
+
+  // alarms.get returns the alarm if it exists, or undefined
+  const existing = await browser.alarms.get("readwise-poll");
+  if (!existing) {
+    await browser.alarms.create("readwise-poll", {
+      periodInMinutes: POLL_INTERVAL_MINUTES,
+    });
+    console.log("[readwise-full-content] Poller alarm created");
+  }
+}
+
+async function stopPoller() {
+  await browser.alarms.clear("readwise-poll");
+  console.log("[readwise-full-content] Poller alarm cleared");
+}
+
 // ============================================================================
 // Message handler (from popup)
 // ============================================================================
 
 browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  // Save current page to Readwise (mobile flow)
+  // Save current page to Readwise (mobile/manual flow)
   if (message.type === "SAVE_PAGE") {
     (async () => {
       try {
         const token = await getToken();
         if (!token) throw new Error("Readwise token not configured");
 
-        // First try creating — if it already exists, replace it
         const result = await createDocument(token, {
           url: message.url,
           html: message.html,
@@ -288,7 +368,6 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         });
 
         if (result.alreadyExisted) {
-          // Document exists — delete and re-create with full content
           const replaced = await replaceDocument(token, result.id, {
             url: message.url,
             html: message.html,
@@ -307,17 +386,22 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ success: false, error: err.message });
       }
     })();
-    return true; // async response
+    return true;
   }
 
   // Get poller status
   if (message.type === "GET_STATUS") {
     (async () => {
       const token = await getToken();
+      const { pollingEnabled } = await browser.storage.local.get(
+        "pollingEnabled",
+      );
+      const alarm = await browser.alarms.get("readwise-poll");
+      const enrichCount = await getEnrichCount();
       sendResponse({
         hasToken: !!token,
-        pollerActive,
-        processedCount: processedUrls.size,
+        pollerActive: pollingEnabled !== false && !!alarm,
+        processedCount: enrichCount,
       });
     })();
     return true;
@@ -328,7 +412,9 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     (async () => {
       await browser.storage.local.set({ pollingEnabled: message.enabled });
       if (message.enabled) {
-        await startPoller();
+        await ensurePollerRunning();
+        // Also run immediately
+        pollAndEnrich();
       } else {
         await stopPoller();
       }
@@ -341,19 +427,16 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 // ============================================================================
-// Init
+// Init — runs every time the event page wakes up
 // ============================================================================
 
 (async () => {
   const token = await getToken();
   if (!token) return;
 
-  // Check if polling is enabled (default: true on desktop)
   const { pollingEnabled } = await browser.storage.local.get("pollingEnabled");
-
-  // Default to enabled if not explicitly set
   if (pollingEnabled !== false) {
     await browser.storage.local.set({ pollingEnabled: true });
-    startPoller();
+    await ensurePollerRunning();
   }
 })();
