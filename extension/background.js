@@ -98,6 +98,18 @@ const LOOKBACK_WINDOW = 24 * 60 * 60 * 1000; // 24 hours
 const MIN_HTML_SIZE = 30000;
 
 // ============================================================================
+// Platform detection
+// ============================================================================
+
+/**
+ * Whether we're running on Android Firefox.
+ * On Android, background tabs are not truly hidden — they become visible
+ * foreground tabs and trigger Firefox's "open in app?" prompts.
+ * Set once at init via getPlatformInfo().
+ */
+let isAndroid = false;
+
+// ============================================================================
 // State — persisted to storage to survive event page unloads
 // ============================================================================
 
@@ -344,6 +356,16 @@ async function extractPageHtml(url) {
       `[readwise-full-content] Fetched via invisible request: ${url}`,
     );
     return fetchResult;
+  }
+
+  // On Android, tabs are not truly backgrounded — they become visible,
+  // cause jarring tab flashing, and trigger Firefox "open in app?" prompts.
+  // Skip the tab fallback; the user's desktop browser will enrich these.
+  if (isAndroid) {
+    console.log(
+      `[readwise-full-content] Fetch insufficient, skipping tab fallback (Android): ${url}`,
+    );
+    return null;
   }
 
   // Fallback: open a real browser tab (handles JS challenges)
@@ -612,6 +634,17 @@ browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 // ============================================================================
 
 (async () => {
+  // Detect platform once at startup
+  try {
+    const platformInfo = await browser.runtime.getPlatformInfo();
+    isAndroid = platformInfo.os === "android";
+    if (isAndroid) {
+      console.log("[readwise-full-content] Running on Android — tab fallback disabled");
+    }
+  } catch {
+    // getPlatformInfo not available, assume desktop
+  }
+
   const token = await getToken();
   if (!token) return;
 
