@@ -32,36 +32,51 @@ async function validateToken(token) {
 /**
  * Fetch recent documents from Readwise Reader.
  *
+ * Supports pagination via `maxPages` — when set to > 1, follows
+ * `nextPageCursor` to fetch additional pages of results.
+ *
  * @param {string} token
  * @param {object} opts
  * @param {string} [opts.updatedAfter] - ISO 8601 timestamp
  * @param {string} [opts.location] - new, later, shortlist, archive, feed
- * @param {number} [opts.limit] - 1-100
+ * @param {number} [opts.limit] - 1-100 (default 100)
+ * @param {number} [opts.maxPages] - Max pages to fetch (default 1)
+ * @param {boolean} [opts.withHtmlContent] - Include HTML content
  * @returns {Promise<Array>} List of documents
  */
 async function listDocuments(token, opts = {}) {
   const params = new URLSearchParams();
   if (opts.updatedAfter) params.set("updatedAfter", opts.updatedAfter);
   if (opts.location) params.set("location", opts.location);
-  if (opts.limit) params.set("limit", String(opts.limit));
   if (opts.withHtmlContent) params.set("withHtmlContent", "true");
+  params.set("limit", String(opts.limit || 100));
 
-  const url = `${READWISE_BASE}/v3/list/?${params.toString()}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Token ${token}` },
-  });
+  let allResults = [];
+  let nextUrl = `${READWISE_BASE}/v3/list/?${params.toString()}`;
+  let pages = 0;
+  const maxPages = opts.maxPages || 1;
 
-  if (res.status === 429) {
-    const retryAfter = res.headers.get("Retry-After") || "60";
-    throw new Error(`RATE_LIMITED:${retryAfter}`);
+  while (nextUrl && pages < maxPages) {
+    const res = await fetch(nextUrl, {
+      headers: { Authorization: `Token ${token}` },
+    });
+
+    if (res.status === 429) {
+      const retryAfter = res.headers.get("Retry-After") || "60";
+      throw new Error(`RATE_LIMITED:${retryAfter}`);
+    }
+
+    if (!res.ok) {
+      throw new Error(`Readwise list failed: ${res.status}`);
+    }
+
+    const data = await res.json();
+    allResults = allResults.concat(data.results || []);
+    nextUrl = data.nextPageCursor || null;
+    pages++;
   }
 
-  if (!res.ok) {
-    throw new Error(`Readwise list failed: ${res.status}`);
-  }
-
-  const data = await res.json();
-  return data.results || [];
+  return allResults;
 }
 
 /**

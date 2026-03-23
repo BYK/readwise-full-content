@@ -78,8 +78,12 @@ const PAYWALL_MARKERS = [
   'id="regwall',
 ];
 
-/** How many recent documents to check per poll */
-const DOCS_TO_CHECK = 20;
+/**
+ * Max pages to fetch from the Readwise API per poll.
+ * Each page holds up to 100 documents, so 5 pages = 500 docs max.
+ * This is a safety cap to prevent runaway loops.
+ */
+const MAX_LIST_PAGES = 5;
 
 /** How long to wait for a page to load before extracting (ms) */
 const PAGE_LOAD_TIMEOUT = 15000;
@@ -169,7 +173,7 @@ async function pollAndEnrich() {
     const lookbackDate = new Date(Date.now() - LOOKBACK_WINDOW).toISOString();
     const docs = await listDocuments(token, {
       updatedAfter: lookbackDate,
-      limit: DOCS_TO_CHECK,
+      maxPages: MAX_LIST_PAGES,
       withHtmlContent: true,
     });
 
@@ -231,7 +235,9 @@ async function pollAndEnrich() {
           `[readwise-full-content] Failed to enrich "${doc.title}":`,
           err.message,
         );
-        await markProcessed(doc.source_url);
+        // Don't markProcessed on errors — allow retry on the next poll cycle.
+        // Only successful enrichments (or intentional skips returned as false
+        // from enrichDocument) get the 24-hour cooldown.
       }
     }
 
