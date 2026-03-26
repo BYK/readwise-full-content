@@ -213,8 +213,10 @@ async function pollAndEnrich() {
       // duplication when multiple Firefox instances run the extension
       if (doc.source === "readwise-full-content") continue;
 
-      // Skip archived documents
-      if (doc.location === "archive") continue;
+      // Only enrich documents the user has saved (inbox, later, shortlist).
+      // Skip feed items (not yet triaged) and archived documents.
+      const enrichLocations = ["new", "later", "shortlist"];
+      if (!enrichLocations.includes(doc.location)) continue;
 
       // Skip if clearly complete (high word count, no markers needed)
       if (doc.word_count >= HIGH_WORD_COUNT) continue;
