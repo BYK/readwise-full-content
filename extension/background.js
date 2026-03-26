@@ -113,6 +113,15 @@ const MIN_HTML_SIZE = 30000;
  */
 let isAndroid = false;
 
+/**
+ * Guard against concurrent pollAndEnrich() runs.
+ * Multiple triggers can overlap: alarm fires, "Re-check" button, toggling
+ * polling on — all call pollAndEnrich() without awaiting the previous run.
+ * Two concurrent runs processing the same article both call replaceDocument(),
+ * racing the delete→create cycle, which creates exact duplicates.
+ */
+let isPolling = false;
+
 // ============================================================================
 // State — persisted to storage to survive event page unloads
 // ============================================================================
@@ -159,15 +168,23 @@ async function getEnrichCount() {
  * Check recent Readwise documents and enrich any that look thin.
  */
 async function pollAndEnrich() {
-  const token = await getToken();
-  if (!token) return;
-
-  const { pollingEnabled } = await browser.storage.local.get("pollingEnabled");
-  if (pollingEnabled === false) return;
-
-  console.log("[readwise-full-content] Polling for thin documents...");
+  // Prevent concurrent poll runs — alarm fires, "Re-check" button,
+  // and polling toggle can all trigger this simultaneously
+  if (isPolling) {
+    console.log("[readwise-full-content] Poll already in progress, skipping");
+    return;
+  }
+  isPolling = true;
 
   try {
+    const token = await getToken();
+    if (!token) return;
+
+    const { pollingEnabled } = await browser.storage.local.get("pollingEnabled");
+    if (pollingEnabled === false) return;
+
+    console.log("[readwise-full-content] Polling for thin documents...");
+
     // Fetch documents updated recently, including HTML content
     // so we can check for paywall markers
     const lookbackDate = new Date(Date.now() - LOOKBACK_WINDOW).toISOString();
@@ -190,6 +207,11 @@ async function pollAndEnrich() {
         skipped++;
         continue;
       }
+
+      // Skip documents already enriched by this extension — re-enriching
+      // won't help (same paywall will block again) and prevents cross-browser
+      // duplication when multiple Firefox instances run the extension
+      if (doc.source === "readwise-full-content") continue;
 
       // Skip archived documents
       if (doc.location === "archive") continue;
@@ -223,9 +245,17 @@ async function pollAndEnrich() {
       );
 
       try {
-        const success = await enrichDocument(token, doc);
+        const result = await enrichDocument(token, doc);
+        // Mark the original source URL as processed
         await markProcessed(doc.source_url);
-        if (success) enriched++;
+        // Also mark the canonical URL if the fetch followed redirects
+        // (e.g. UTM params stripped, email click trackers resolved).
+        // Without this, the replacement doc's new URL won't be protected
+        // by the cooldown, causing a re-enrichment loop.
+        if (result.canonicalUrl && result.canonicalUrl !== doc.source_url) {
+          await markProcessed(result.canonicalUrl);
+        }
+        if (result.enriched) enriched++;
       } catch (err) {
         if (err.message?.startsWith("RATE_LIMITED")) {
           console.warn("[readwise-full-content] Rate limited, will retry next poll");
@@ -250,6 +280,8 @@ async function pollAndEnrich() {
       return;
     }
     console.error("[readwise-full-content] Poll error:", err);
+  } finally {
+    isPolling = false;
   }
 }
 
@@ -294,7 +326,10 @@ function hasPaywallMarkers(html) {
  * Enrich a single document by loading it in a background tab,
  * extracting the full page HTML, and pushing it to Readwise.
  *
- * Returns true if enrichment succeeded, false if skipped.
+ * @returns {{ enriched: boolean, canonicalUrl?: string }}
+ *   enriched: true if the document was replaced with full content
+ *   canonicalUrl: the URL used for the replacement (after redirects),
+ *     so the caller can mark it as processed to prevent re-enrichment
  */
 async function enrichDocument(token, doc) {
   const result = await extractPageHtml(doc.source_url);
@@ -303,7 +338,7 @@ async function enrichDocument(token, doc) {
     console.warn(
       `[readwise-full-content] No HTML extracted from ${doc.source_url}`,
     );
-    return false;
+    return { enriched: false };
   }
 
   const { html, finalUrl } = result;
@@ -314,12 +349,23 @@ async function enrichDocument(token, doc) {
     console.warn(
       `[readwise-full-content] Unusable HTML (${html.length} bytes), skipping — ${doc.source_url}`,
     );
-    return false;
+    return { enriched: false };
   }
 
   // Use the final URL (after redirects) as the canonical URL.
   // This handles tracking redirects like click.e.economist.com → economist.com
   const canonicalUrl = finalUrl || doc.source_url;
+
+  // Check if the extracted HTML still contains paywall markers.
+  // This means the fetch didn't get past the paywall — replacing the
+  // document would just swap one paywall stub for another, and the
+  // resulting low word count would trigger re-enrichment on the next poll.
+  if (hasPaywallMarkers(html)) {
+    console.warn(
+      `[readwise-full-content] Extracted HTML contains paywall markers, skipping — ${doc.source_url}`,
+    );
+    return { enriched: false, canonicalUrl };
+  }
 
   // Replace the thin document with the full-content version
   await replaceDocument(token, doc.id, {
@@ -342,7 +388,7 @@ async function enrichDocument(token, doc) {
         ? ` (redirected to ${canonicalUrl})`
         : ""),
   );
-  return true;
+  return { enriched: true, canonicalUrl };
 }
 
 /**
