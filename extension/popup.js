@@ -23,6 +23,8 @@ const els = {
   errorMessage: document.getElementById("error-message"),
   pollingToggle: document.getElementById("polling-toggle"),
   retryAllBtn: document.getElementById("retry-all-btn"),
+  tabExtractionRow: document.getElementById("tab-extraction-row"),
+  tabExtractionToggle: document.getElementById("tab-extraction-toggle"),
   pollerStatus: document.getElementById("poller-status"),
   tokenInput: document.getElementById("token-input"),
   saveTokenBtn: document.getElementById("save-token-btn"),
@@ -59,6 +61,19 @@ async function init() {
   // Load polling state
   const { pollingEnabled } = await browser.storage.local.get("pollingEnabled");
   els.pollingToggle.checked = pollingEnabled !== false;
+
+  // On Android, show the tab extraction toggle
+  try {
+    const platformInfo = await browser.runtime.getPlatformInfo();
+    if (platformInfo.os === "android") {
+      els.tabExtractionRow.classList.remove("hidden");
+      const { tabExtractionEnabled } =
+        await browser.storage.local.get("tabExtractionEnabled");
+      els.tabExtractionToggle.checked = tabExtractionEnabled === true;
+    }
+  } catch {
+    // getPlatformInfo not available, leave toggle hidden (desktop)
+  }
 
   // Get background status
   try {
@@ -229,6 +244,12 @@ els.retryAllBtn.addEventListener("click", async () => {
     els.retryAllBtn.disabled = false;
     els.retryAllBtn.textContent = "Re-check all recent articles";
   }, 3000);
+});
+
+els.tabExtractionToggle.addEventListener("change", async () => {
+  await browser.storage.local.set({
+    tabExtractionEnabled: els.tabExtractionToggle.checked,
+  });
 });
 
 els.pollingToggle.addEventListener("change", async () => {

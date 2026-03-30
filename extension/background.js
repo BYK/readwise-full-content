@@ -414,12 +414,18 @@ async function extractPageHtml(url) {
 
   // On Android, tabs are not truly backgrounded — they become visible,
   // cause jarring tab flashing, and trigger Firefox "open in app?" prompts.
-  // Skip the tab fallback; the user's desktop browser will enrich these.
+  // Skip the tab fallback unless the user explicitly opted in via the popup.
   if (isAndroid) {
+    const { tabExtractionEnabled } = await browser.storage.local.get("tabExtractionEnabled");
+    if (!tabExtractionEnabled) {
+      console.log(
+        `[readwise-full-content] Fetch insufficient, skipping tab fallback (Android): ${url}`,
+      );
+      return null;
+    }
     console.log(
-      `[readwise-full-content] Fetch insufficient, skipping tab fallback (Android): ${url}`,
+      `[readwise-full-content] Tab extraction enabled on Android, using tab fallback: ${url}`,
     );
-    return null;
   }
 
   // Fallback: open a real browser tab (handles JS challenges)
